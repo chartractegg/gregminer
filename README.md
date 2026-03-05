@@ -1,30 +1,40 @@
 # GregMiner ⛏
 
-A single-file Python GUI for **Gregcoin (GRC)** — mine blocks and manage your wallet from one clean window.
+A Gregcoin (GRC) wallet + miner in a single desktop app — no command line needed.
 
-![GregMiner Screenshot](docs/screenshot.png)
+## Download
+
+**[⬇ Get the latest release →](https://github.com/chartractegg/gregminer/releases/latest)**
+
+| Platform | File | Instructions |
+|----------|------|-------------|
+| 🪟 Windows | `GregMiner-Windows.zip` | Extract, double-click `GregMiner.exe` |
+| 🍎 macOS | `GregMiner-macOS.dmg` | Open, drag to Applications, double-click |
+| 🐧 Linux | `GregMiner-Linux.tar.gz` | Extract, run `./GregMiner` |
+
+> No Python or other software required — just download and run.
+
+---
 
 ## Features
 
 | Tab | What it does |
 |-----|-------------|
-| 🔌 Connect | Enter your node's RPC details and connect |
-| 💰 Wallet | Check balance, copy your receive address, send GRC |
+| 🔌 Connect | Enter your gregcoind node's RPC details |
+| 💰 Wallet | Check balance, copy receive address, send GRC |
 | ⛏ Miner | Start/stop CPU mining with live hashrate + block counter |
 | 📋 History | Browse recent transactions |
 | ℹ About | Gregcoin network parameters |
 
-## Requirements
+---
 
-- Python 3.8+
-- A running `gregcoind` node (see [Gregcoin](https://github.com/chartractegg/gregcoin))
-- **No external packages** — uses only Python stdlib
+## You'll also need: gregcoind
 
-## Quick Start
+GregMiner is a GUI frontend — it connects to a running Gregcoin node.
 
-### 1. Set up your gregcoind node
+Download Gregcoin Core from **[chartractegg/gregcoin](https://github.com/chartractegg/gregcoin)** and follow its setup instructions.
 
-Create `~/.gregcoin/gregcoin.conf` (or `%APPDATA%\Gregcoin\gregcoin.conf` on Windows):
+Quick node config (`~/.gregcoin/gregcoin.conf`):
 
 ```ini
 server=1
@@ -34,33 +44,15 @@ rpcallowip=127.0.0.1
 rpcport=8445
 ```
 
-Start the node:
+Start it:
 
 ```sh
 gregcoind -daemon
-# or for regtest (local testing):
-gregcoind -regtest -daemon
 ```
 
-### 2. Run GregMiner
+Then open GregMiner → Connect tab → fill in the same user/password → **Connect**.
 
-```sh
-python3 gregminer.py
-```
-
-- Go to the **Connect** tab, fill in your RPC details, and hit **Connect**.
-- Go to **Wallet** to see your balance and addresses.
-- Go to **Miner** and click **Start Mining**!
-
-## Building a Standalone Executable
-
-```sh
-pip install pyinstaller
-pyinstaller --onefile --windowed --name GregMiner gregminer.py
-# Output: dist/GregMiner  (or dist/GregMiner.exe on Windows)
-```
-
-The resulting binary runs on any machine — no Python needed.
+---
 
 ## Gregcoin Network Parameters
 
@@ -75,11 +67,18 @@ The resulting binary runs on any machine — no Python needed.
 | Mainnet Port | 8444 |
 | RPC Port | 8445 |
 
-## How Mining Works
+---
 
-GregMiner uses Bitcoin's `getblocktemplate` protocol to fetch candidate blocks from your node, then searches for a valid proof-of-work nonce using Python's `hashlib`. It submits found blocks via `submitblock`. All mining runs in a background thread so the GUI stays responsive.
+## Building from Source
 
-> ⚠️ CPU mining is for fun and testing. Gregcoin's difficulty is tuned for small clusters of Raspberry Pis.
+```sh
+# Requires Python 3.8+
+python3 gregminer.py
+
+# Build a standalone executable
+pip install pyinstaller
+pyinstaller --onefile --windowed --name GregMiner gregminer.py
+```
 
 ## License
 

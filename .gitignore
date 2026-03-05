@@ -6,3 +6,6 @@ build/
 *.spec
 .DS_Store
 Thumbs.db
+
+# Don't ignore build assets dir
+!build/

@@ -1,0 +1,153 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Build EXE
+        run: >
+          pyinstaller
+          --onefile
+          --windowed
+          --name GregMiner
+          --icon build/icon.ico
+          gregminer.py
+
+      - name: Zip EXE
+        run: Compress-Archive -Path dist\GregMiner.exe -DestinationPath dist\GregMiner-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist/GregMiner-Windows.zip
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller + create-dmg
+        run: |
+          pip install pyinstaller
+          brew install create-dmg
+
+      - name: Build .app
+        run: >
+          pyinstaller
+          --onedir
+          --windowed
+          --name GregMiner
+          --icon build/icon.icns
+          gregminer.py
+
+      - name: Create DMG
+        run: |
+          create-dmg \
+            --volname "GregMiner" \
+            --volicon "build/icon.icns" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "GregMiner.app" 175 190 \
+            --hide-extension "GregMiner.app" \
+            --app-drop-link 425 190 \
+            "dist/GregMiner-macOS.dmg" \
+            "dist/GregMiner.app" \
+          || mv dist/GregMiner.app /tmp/GregMiner.app && \
+             hdiutil create -volname GregMiner -srcfolder /tmp/GregMiner.app \
+               -ov -format UDZO dist/GregMiner-macOS.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: dist/GregMiner-macOS.dmg
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          sudo apt-get install -y python3-tk
+          pip install pyinstaller
+
+      - name: Build binary
+        run: >
+          pyinstaller
+          --onefile
+          --name GregMiner
+          gregminer.py
+
+      - name: Tar binary
+        run: tar -czf dist/GregMiner-Linux.tar.gz -C dist GregMiner
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: dist/GregMiner-Linux.tar.gz
+
+  release:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "GregMiner ${{ github.ref_name }}"
+          body: |
+            ## GregMiner ${{ github.ref_name }}
+
+            Download for your platform below and double-click to run — no Python needed.
+
+            | Platform | Download |
+            |----------|----------|
+            | 🪟 Windows | `GregMiner-Windows.zip` → extract and run `GregMiner.exe` |
+            | 🍎 macOS | `GregMiner-macOS.dmg` → open, drag to Applications |
+            | 🐧 Linux | `GregMiner-Linux.tar.gz` → extract and run `./GregMiner` |
+
+            ### What's inside
+            - **Connect** — enter your gregcoind RPC details
+            - **Wallet** — check balance, receive & send GRC
+            - **Miner** — CPU mine with live hashrate stats
+            - **History** — recent transactions
+
+            ### Need a node?
+            Download Gregcoin Core from [chartractegg/gregcoin](https://github.com/chartractegg/gregcoin).
+          files: |
+            artifacts/windows-build/GregMiner-Windows.zip
+            artifacts/macos-build/GregMiner-macOS.dmg
+            artifacts/linux-build/GregMiner-Linux.tar.gz
+          draft: false
+          prerelease: false
