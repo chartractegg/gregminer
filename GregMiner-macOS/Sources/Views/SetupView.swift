@@ -5,6 +5,7 @@ struct SetupView: View {
     @EnvironmentObject var appState: AppState
     @State private var customPath = ""
     @State private var showAdvanced = false
+    @State private var searchStatus = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,28 +20,45 @@ struct SetupView: View {
                 Text("Welcome to GregMiner")
                     .font(.largeTitle.bold())
 
-                Text("GregMiner needs the Gregcoin node software to run.\nLocate your **gregcoind** binary to get started.")
+                Text("GregMiner needs the **gregcoind** binary to run a Gregcoin node.\nLocate it on your Mac to get started.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: 450)
 
-                // Main action
-                Button {
-                    appState.locateGregcoind()
-                } label: {
-                    Label("Locate gregcoind...", systemImage: "folder")
-                        .frame(width: 220)
+                // Main actions
+                HStack(spacing: 12) {
+                    Button {
+                        appState.locateGregcoind()
+                    } label: {
+                        Label("Browse for gregcoind...", systemImage: "folder")
+                            .frame(width: 200)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(.large)
+
+                    Button {
+                        autoDetect()
+                    } label: {
+                        Label("Auto-Detect", systemImage: "magnifyingglass")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .controlSize(.large)
+
+                if !searchStatus.isEmpty {
+                    Text(searchStatus)
+                        .font(.caption)
+                        .foregroundStyle(searchStatus.starts(with: "Found") ? .green : .orange)
+                        .multilineTextAlignment(.center)
+                }
 
                 // Advanced toggle
                 DisclosureGroup("Advanced Options", isExpanded: $showAdvanced) {
                     VStack(alignment: .leading, spacing: 12) {
                         // Manual path entry
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Or enter the path manually:")
+                            Text("Or paste the full path:")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             HStack {
@@ -61,7 +79,7 @@ struct SetupView: View {
 
                         // Connect to remote node instead
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Already running a node elsewhere?")
+                            Text("Already running a node on another machine?")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Button {
@@ -80,10 +98,13 @@ struct SetupView: View {
 
                 // Help text
                 VStack(spacing: 4) {
-                    Text("Don't have gregcoind?")
+                    Text("Don't have gregcoind yet?")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Build it from source: **github.com/chartractegg/gregcoin**")
+                    Text("Build from source: **github.com/chartractegg/gregcoin**")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Or just download the release DMG — it comes bundled.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -99,5 +120,82 @@ struct SetupView: View {
                 .padding(.bottom, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            // Try auto-detect on appear
+            if let path = NodeManager.bundledBinaryPath {
+                searchStatus = "Found: \(path)"
+                appState.completeSetup(path: path)
+            }
+        }
+    }
+
+    private func autoDetect() {
+        searchStatus = "Searching..."
+        // Run on background to not block UI
+        DispatchQueue.global().async {
+            // Search common locations
+            let searchPaths = [
+                "/usr/local/bin/gregcoind",
+                "/opt/homebrew/bin/gregcoind",
+                "/tmp/gregcoin-build/build/bin/gregcoind",
+                "\(FileManager.default.homeDirectoryForCurrentUser.path)/gregcoin/build/bin/gregcoind",
+                "\(FileManager.default.homeDirectoryForCurrentUser.path)/Developer/GregMiner/Resources/gregcoind",
+            ]
+
+            // Also try `which` and `mdfind`
+            var found: String? = nil
+
+            for path in searchPaths {
+                if FileManager.default.isExecutableFile(atPath: path) {
+                    found = path
+                    break
+                }
+            }
+
+            // Try `which gregcoind`
+            if found == nil {
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+                task.arguments = ["gregcoind"]
+                let pipe = Pipe()
+                task.standardOutput = pipe
+                try? task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !path.isEmpty && FileManager.default.isExecutableFile(atPath: path) {
+                    found = path
+                }
+            }
+
+            // Try mdfind
+            if found == nil {
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+                task.arguments = ["-name", "gregcoind"]
+                let pipe = Pipe()
+                task.standardOutput = pipe
+                try? task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let results = String(data: data, encoding: .utf8)?.components(separatedBy: "\n") ?? []
+                for result in results {
+                    let path = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if path.hasSuffix("gregcoind") && FileManager.default.isExecutableFile(atPath: path) {
+                        found = path
+                        break
+                    }
+                }
+            }
+
+            DispatchQueue.main.async {
+                if let path = found {
+                    searchStatus = "Found: \(path)"
+                    appState.completeSetup(path: path)
+                } else {
+                    searchStatus = "Not found. Use Browse to locate it manually."
+                }
+            }
+        }
     }
 }
