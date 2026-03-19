@@ -4,26 +4,30 @@ struct ContentView: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView()
-        } detail: {
-            switch appState.selectedTab {
-            case .dashboard:
-                DashboardView()
-            case .wallet:
-                WalletView()
-            case .send:
-                SendView()
-            case .miner:
-                MinerView()
-            case .node:
-                NodeView()
+        if appState.needsSetup {
+            SetupView()
+        } else {
+            NavigationSplitView {
+                SidebarView()
+            } detail: {
+                switch appState.selectedTab {
+                case .dashboard:
+                    DashboardView()
+                case .wallet:
+                    WalletView()
+                case .send:
+                    SendView()
+                case .miner:
+                    MinerView()
+                case .node:
+                    NodeView()
+                }
             }
-        }
-        .navigationTitle("")
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                StatusBadge()
+            .navigationTitle("")
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    StatusBadge()
+                }
             }
         }
     }
