@@ -38,50 +38,42 @@ jobs:
           name: windows-build
           path: dist/GregMiner-Windows.zip
 
-  build-macos:
-    runs-on: macos-latest
+  build-macos-native:
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install PyInstaller + create-dmg
+      - name: Install build dependencies
         run: |
-          pip install pyinstaller
-          brew install create-dmg
+          brew install cmake automake libtool boost libevent create-dmg
 
-      - name: Build .app
-        run: >
-          pyinstaller
-          --onedir
-          --windowed
-          --name GregMiner
-          --icon build/icon.icns
-          gregminer.py
-
-      - name: Create DMG
+      - name: Build gregcoind from source
         run: |
-          create-dmg \
-            --volname "GregMiner" \
-            --volicon "build/icon.icns" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
-            --icon-size 100 \
-            --icon "GregMiner.app" 175 190 \
-            --hide-extension "GregMiner.app" \
-            --app-drop-link 425 190 \
-            "dist/GregMiner-macOS.dmg" \
-            "dist/GregMiner.app" \
-          || mv dist/GregMiner.app /tmp/GregMiner.app && \
-             hdiutil create -volname GregMiner -srcfolder /tmp/GregMiner.app \
-               -ov -format UDZO dist/GregMiner-macOS.dmg
+          git clone --depth 1 https://github.com/chartractegg/gregcoin.git /tmp/gregcoin
+          cd /tmp/gregcoin
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DWITH_ZMQ=OFF \
+            -DWITH_MINIUPNPC=OFF
+          cmake --build build -j$(sysctl -n hw.ncpu)
+          # Find and verify the binary
+          GREGCOIND=$(find build -name 'gregcoind' -type f | head -1)
+          echo "Built gregcoind at: $GREGCOIND"
+          file "$GREGCOIND"
+          cp "$GREGCOIND" /tmp/gregcoind
+          chmod +x /tmp/gregcoind
+
+      - name: Build native macOS app + DMG
+        run: |
+          cd GregMiner-macOS
+          chmod +x scripts/build-dmg.sh
+          ./scripts/build-dmg.sh --gregcoind-bin /tmp/gregcoind
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-build
-          path: dist/GregMiner-macOS.dmg
+          name: macos-native-build
+          path: GregMiner-macOS/dist/GregMiner-macOS.dmg
 
   build-linux:
     runs-on: ubuntu-latest
@@ -113,7 +105,7 @@ jobs:
           path: dist/GregMiner-Linux.tar.gz
 
   release:
-    needs: [build-windows, build-macos, build-linux]
+    needs: [build-windows, build-macos-native, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -129,25 +121,33 @@ jobs:
           body: |
             ## GregMiner ${{ github.ref_name }}
 
-            Download for your platform below and double-click to run — no Python needed.
+            ### macOS — Download and go
+            **`GregMiner-macOS.dmg`** is a standalone app. Open the DMG, drag to Applications, double-click. That's it.
+
+            Everything is built in — wallet, full node, and CPU miner. No setup required.
+
+            If macOS says "unidentified developer": right-click the app → Open → Open.
+
+            | Feature | |
+            |---------|---|
+            | Wallet | Send & receive GRC |
+            | Full Node | Built-in gregcoind starts automatically |
+            | CPU Miner | One-click mining with live hashrate |
+            | Dashboard | Balance, node status, network info |
+
+            ### Windows / Linux
+            These use the Python/tkinter GUI and connect to a separate gregcoind node.
 
             | Platform | Download |
             |----------|----------|
+            | 🍎 **macOS** | `GregMiner-macOS.dmg` — standalone, just works |
             | 🪟 Windows | `GregMiner-Windows.zip` → extract and run `GregMiner.exe` |
-            | 🍎 macOS | `GregMiner-macOS.dmg` → open, drag to Applications |
             | 🐧 Linux | `GregMiner-Linux.tar.gz` → extract and run `./GregMiner` |
 
-            ### What's inside
-            - **Connect** — enter your gregcoind RPC details
-            - **Wallet** — check balance, receive & send GRC
-            - **Miner** — CPU mine with live hashrate stats
-            - **History** — recent transactions
-
-            ### Need a node?
-            Download Gregcoin Core from [chartractegg/gregcoin](https://github.com/chartractegg/gregcoin).
+            Windows/Linux users: download Gregcoin Core from [chartractegg/gregcoin](https://github.com/chartractegg/gregcoin).
           files: |
+            artifacts/macos-native-build/GregMiner-macOS.dmg
             artifacts/windows-build/GregMiner-Windows.zip
-            artifacts/macos-build/GregMiner-macOS.dmg
             artifacts/linux-build/GregMiner-Linux.tar.gz
           draft: false
           prerelease: false

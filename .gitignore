@@ -9,3 +9,8 @@ Thumbs.db
 
 # Don't ignore build assets dir
 !build/
+
+# Swift
+GregMiner-macOS/.build/
+GregMiner-macOS/dist/
+.swiftpm/
