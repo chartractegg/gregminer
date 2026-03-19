@@ -23,6 +23,7 @@ class AppState: ObservableObject {
     // UI
     @Published var selectedTab: SidebarTab = .dashboard
     @Published var statusMessage: String = ""
+    @Published var needsSetup: Bool = false
 
     // Settings (persisted)
     @AppStorage("rpcHost") var rpcHost: String = "127.0.0.1"
@@ -70,10 +71,14 @@ class AppState: ObservableObject {
         // Load saved mining address
         miningAddress = savedMiningAddress
 
-        // Auto-start the built-in node — this is the default experience.
-        // The app just works out of the box.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.startNode()
+        // Auto-start the built-in node if gregcoind is available.
+        // If not, show the setup screen so the user can locate it.
+        if nodeMode == .embedded && NodeManager.bundledBinaryPath == nil && gregcoindPath.isEmpty {
+            needsSetup = true
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.startNode()
+            }
         }
     }
 
@@ -85,6 +90,28 @@ class AppState: ObservableObject {
         nodeManager.binaryPath = gregcoindPath
         nodeManager.mode = nodeMode
         savedNodeMode = nodeMode.rawValue
+    }
+
+    // MARK: - Setup
+
+    func locateGregcoind() {
+        let panel = NSOpenPanel()
+        panel.title = "Locate gregcoind"
+        panel.message = "Select your gregcoind binary so GregMiner can run a full node."
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        if panel.runModal() == .OK, let url = panel.url {
+            gregcoindPath = url.path
+            needsSetup = false
+            startNode()
+        }
+    }
+
+    func completeSetup(path: String) {
+        gregcoindPath = path
+        needsSetup = false
+        startNode()
     }
 
     // MARK: - Node

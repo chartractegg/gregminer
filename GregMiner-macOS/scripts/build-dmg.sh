@@ -56,7 +56,7 @@ else
     fi
 
     # Check for required deps — install common ones
-    for dep in automake libtool boost libevent; do
+    for dep in automake libtool boost libevent pkg-config; do
         if ! brew list "$dep" &>/dev/null; then
             echo "    Installing $dep..."
             brew install "$dep"
@@ -69,6 +69,8 @@ else
         -DBUILD_TESTING=OFF \
         -DWITH_ZMQ=OFF \
         -DWITH_MINIUPNPC=OFF \
+        -DENABLE_IPC=OFF \
+        -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
         2>&1 | tail -5
 
     echo "    Compiling (this may take a few minutes)..."
