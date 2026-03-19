@@ -56,18 +56,36 @@ class NodeManager: ObservableObject {
 
     var isEmbedded: Bool { mode == .embedded }
 
-    /// Path to the gregcoind binary bundled inside the .app
+    /// Path to the gregcoind binary — checks multiple locations
     static var bundledBinaryPath: String? {
-        // Look inside the app bundle: GregMiner.app/Contents/Resources/gregcoind
-        if let resourceURL = Bundle.main.resourceURL {
-            let path = resourceURL.appendingPathComponent("gregcoind").path
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
+        let candidates: [String] = {
+            var paths: [String] = []
+
+            // 1. Inside app bundle Resources
+            if let resourceURL = Bundle.main.resourceURL {
+                paths.append(resourceURL.appendingPathComponent("gregcoind").path)
             }
-        }
-        // Fallback: check next to the executable (for dev/SPM builds)
-        if let execURL = Bundle.main.executableURL {
-            let path = execURL.deletingLastPathComponent().appendingPathComponent("gregcoind").path
+
+            // 2. Next to the app executable (SPM builds)
+            if let execURL = Bundle.main.executableURL {
+                paths.append(execURL.deletingLastPathComponent().appendingPathComponent("gregcoind").path)
+            }
+
+            // 3. Common system locations
+            paths.append("/usr/local/bin/gregcoind")
+            paths.append("/opt/homebrew/bin/gregcoind")
+
+            // 4. User's home directory builds
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            paths.append("\(home)/gregcoin/build/bin/gregcoind")
+
+            // 5. Temp build location (from build-dmg.sh)
+            paths.append("/tmp/gregcoin-build/build/bin/gregcoind")
+
+            return paths
+        }()
+
+        for path in candidates {
             if FileManager.default.isExecutableFile(atPath: path) {
                 return path
             }
@@ -115,22 +133,45 @@ class NodeManager: ObservableObject {
 
         // Resolve binary path: explicit setting > bundled > error
         let resolvedPath: String
-        if !binaryPath.isEmpty && FileManager.default.isExecutableFile(atPath: binaryPath) {
-            resolvedPath = binaryPath
+        if !binaryPath.isEmpty {
+            if FileManager.default.isExecutableFile(atPath: binaryPath) {
+                resolvedPath = binaryPath
+                addLog("Using gregcoind at: \(binaryPath)")
+            } else {
+                status = .error("gregcoind not executable at: \(binaryPath)")
+                addLog("ERROR: File exists but not executable: \(binaryPath)")
+                addLog("Try: chmod +x \"\(binaryPath)\"")
+                return
+            }
         } else if let bundled = NodeManager.bundledBinaryPath {
             resolvedPath = bundled
-            addLog("Using bundled gregcoind")
+            addLog("Using bundled gregcoind: \(bundled)")
         } else {
-            status = .error("gregcoind not found. Go to Settings to set the path.")
-            addLog("ERROR: gregcoind binary not found in app bundle or at configured path")
+            status = .error("gregcoind not found")
+            addLog("ERROR: gregcoind not found in app bundle or at configured path")
+            addLog("Bundle resource URL: \(Bundle.main.resourceURL?.path ?? "nil")")
+            addLog("Executable URL: \(Bundle.main.executableURL?.path ?? "nil")")
             return
         }
 
         // Ensure data directory exists
-        try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+            addLog("Data directory: \(dataDir.path)")
+        } catch {
+            status = .error("Can't create data dir: \(error.localizedDescription)")
+            addLog("ERROR: \(error.localizedDescription)")
+            return
+        }
 
         // Write config if it doesn't exist
         ensureConfig()
+
+        // Ensure RPC password is set
+        if rpcPassword.isEmpty {
+            rpcPassword = NodeManager.generatePassword()
+            addLog("Generated RPC password")
+        }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: resolvedPath)
@@ -143,6 +184,8 @@ class NodeManager: ObservableObject {
             "-rpcallowip=127.0.0.1",
             "-printtoconsole",
         ]
+        addLog("Starting: \(resolvedPath)")
+        addLog("Args: \(process.arguments?.joined(separator: " ") ?? "")")
 
         // Capture stdout/stderr for log
         let pipe = Pipe()
