@@ -193,6 +193,7 @@ struct BlockTemplate: Codable {
     let bits: String
     let height: Int
     let curtime: Int
+    let default_witness_commitment: String? // present when segwit txs exist in mempool
 
     struct BlockTemplateTx: Codable {
         let data: String

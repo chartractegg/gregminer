@@ -120,10 +120,10 @@ class MinerEngine: ObservableObject {
     // MARK: - Block Building
 
     private func buildBlock(template tmpl: BlockTemplate) -> (Data, String, String)? {
-        let addressScript = p2pkhScript(address: miningAddress)
-        guard let addrScript = addressScript else {
+        // Gregcoin uses bech32 segwit addresses (grc1q...) — build P2WPKH output script
+        guard let addrScript = p2wpkhScript(address: miningAddress) else {
             DispatchQueue.main.async { [weak self] in
-                self?.onLog?("ERROR: Invalid mining address")
+                self?.onLog?("ERROR: Invalid mining address (must be bech32 grc1q... address)")
             }
             return nil
         }
@@ -132,7 +132,8 @@ class MinerEngine: ObservableObject {
             height: tmpl.height,
             value: tmpl.coinbasevalue,
             scriptPubKey: addrScript,
-            extraNonce: extraNonce
+            extraNonce: extraNonce,
+            witnessCommitment: tmpl.default_witness_commitment
         )
 
         var txids: [Data] = [sha256d(coinbase)]
@@ -181,7 +182,6 @@ class MinerEngine: ObservableObject {
             }
 
             let hash = sha256d(header)
-            // Compare hash (reversed) against target
             if hashLessThanTarget(hash: hash, target: target) {
                 let blockHash = Data(hash.reversed()).hexString
                 return (nonce, blockHash)
@@ -247,7 +247,6 @@ class MinerEngine: ObservableObject {
         let exp = Int((nbits >> 24) & 0xFF)
         let mant = nbits & 0x007FFFFF
 
-        // Build 32-byte target
         var target = [UInt8](repeating: 0, count: 32)
         let mantBytes = [
             UInt8((mant >> 16) & 0xFF),
@@ -267,7 +266,6 @@ class MinerEngine: ObservableObject {
     }
 
     private func hashLessThanTarget(hash: Data, target: [UInt8]) -> Bool {
-        // Hash is in internal byte order; compare reversed (big-endian)
         let hashBytes = Array(hash.reversed())
         for i in 0..<32 {
             if hashBytes[i] < target[i] { return true }
@@ -276,34 +274,107 @@ class MinerEngine: ObservableObject {
         return false
     }
 
-    private func p2pkhScript(address: String) -> Data? {
-        let alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-        var n = BigUInt.zero
-        for ch in address {
-            guard let idx = alphabet.firstIndex(of: ch) else { return nil }
-            n = n * 58 + BigUInt(alphabet.distance(from: alphabet.startIndex, to: idx))
-        }
+    // MARK: - Address Scripts
 
-        // Convert to 25 bytes
-        var raw = [UInt8](repeating: 0, count: 25)
-        var temp = n
-        for i in stride(from: 24, through: 0, by: -1) {
-            raw[i] = UInt8(temp % 256)
-            temp = temp / 256
-        }
+    /// Build a P2WPKH scriptPubKey (OP_0 <20-byte-hash>) from a bech32 grc1q... address.
+    private func p2wpkhScript(address: String) -> Data? {
+        guard let (hrp, decoded) = bech32Decode(address),
+              hrp == "grc",
+              !decoded.isEmpty,
+              decoded[0] == 0 // witness version 0 = P2WPKH / P2WSH
+        else { return nil }
 
-        let hash160 = Data(raw[1..<21])
+        // Convert remaining 5-bit groups → 8-bit bytes
+        guard let program = convertBits(Array(decoded.dropFirst()), from: 5, to: 8, pad: false),
+              program.count == 20 // P2WPKH requires exactly 20 bytes
+        else { return nil }
+
         var script = Data()
-        script.append(0x76) // OP_DUP
-        script.append(0xa9) // OP_HASH160
-        script.append(0x14) // Push 20 bytes
-        script.append(hash160)
-        script.append(0x88) // OP_EQUALVERIFY
-        script.append(0xac) // OP_CHECKSIG
+        script.append(0x00) // OP_0
+        script.append(0x14) // push 20 bytes
+        script.append(contentsOf: program)
         return script
     }
 
-    private func buildCoinbase(height: Int, value: Int, scriptPubKey: Data, extraNonce: UInt32) -> Data {
+    // MARK: - Bech32 Decoding
+
+    private static let bech32Charset = Array("qpzry9x8gf2tvdw0s3jn54khce6mua7l")
+
+    /// Decode a bech32 string into (hrp, 5-bit data values without checksum).
+    private func bech32Decode(_ str: String) -> (hrp: String, data: [UInt8])? {
+        let lower = str.lowercased()
+        guard let sepIdx = lower.lastIndex(of: "1") else { return nil }
+        let hrp = String(lower[lower.startIndex..<sepIdx])
+        let dataPart = String(lower[lower.index(after: sepIdx)...])
+        guard !hrp.isEmpty, dataPart.count >= 6 else { return nil }
+
+        var values = [UInt8]()
+        for ch in dataPart {
+            guard let idx = MinerEngine.bech32Charset.firstIndex(of: ch) else { return nil }
+            values.append(UInt8(idx))
+        }
+
+        guard bech32VerifyChecksum(hrp: hrp, data: values) else { return nil }
+
+        return (hrp, Array(values.dropLast(6)))
+    }
+
+    private func bech32VerifyChecksum(hrp: String, data: [UInt8]) -> Bool {
+        return bech32Polymod(bech32HRPExpand(hrp) + data) == 1
+    }
+
+    private func bech32HRPExpand(_ hrp: String) -> [UInt8] {
+        var result = [UInt8]()
+        for scalar in hrp.unicodeScalars { result.append(UInt8(scalar.value >> 5)) }
+        result.append(0)
+        for scalar in hrp.unicodeScalars { result.append(UInt8(scalar.value & 31)) }
+        return result
+    }
+
+    private func bech32Polymod(_ values: [UInt8]) -> UInt32 {
+        let gen: [UInt32] = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+        var chk: UInt32 = 1
+        for v in values {
+            let b = chk >> 25
+            chk = (chk & 0x1ffffff) << 5 ^ UInt32(v)
+            for i in 0..<5 where (b >> i) & 1 == 1 {
+                chk ^= gen[i]
+            }
+        }
+        return chk
+    }
+
+    /// Convert between bit-group sizes (e.g. 5→8 for bech32 witness program decoding).
+    private func convertBits(_ data: [UInt8], from fromBits: Int, to toBits: Int, pad: Bool) -> [UInt8]? {
+        var acc = 0, bits = 0
+        var result = [UInt8]()
+        let maxv = (1 << toBits) - 1
+
+        for value in data {
+            acc = (acc << fromBits) | Int(value)
+            bits += fromBits
+            while bits >= toBits {
+                bits -= toBits
+                result.append(UInt8((acc >> bits) & maxv))
+            }
+        }
+
+        if pad {
+            if bits > 0 { result.append(UInt8((acc << (toBits - bits)) & maxv)) }
+        } else if bits >= fromBits || ((acc << (toBits - bits)) & maxv) != 0 {
+            return nil // non-zero padding
+        }
+
+        return result
+    }
+
+    // MARK: - Coinbase Builder
+
+    /// Build the coinbase transaction.
+    /// When `witnessCommitment` is provided (GBT's `default_witness_commitment` hex scriptPubKey),
+    /// a second zero-value output is added as required by BIP 141 for segwit blocks.
+    private func buildCoinbase(height: Int, value: Int, scriptPubKey: Data,
+                               extraNonce: UInt32, witnessCommitment: String? = nil) -> Data {
         let heightBytes: Data = {
             var h = height
             var bytes = Data()
@@ -327,26 +398,38 @@ class MinerEngine: ObservableObject {
         tx.append(contentsOf: withUnsafeBytes(of: Int32(1).littleEndian) { Data($0) })
         // Input count
         tx.append(varint(1))
-        // Previous outpoint (null)
+        // Previous outpoint (null — coinbase)
         tx.append(Data(repeating: 0, count: 32))
         tx.append(contentsOf: withUnsafeBytes(of: UInt32(0xFFFFFFFF).littleEndian) { Data($0) })
-        // Script sig
+        // ScriptSig
         tx.append(varint(UInt64(scriptSig.count)))
         tx.append(scriptSig)
         // Sequence
         tx.append(contentsOf: withUnsafeBytes(of: UInt32(0xFFFFFFFF).littleEndian) { Data($0) })
-        // Output count
-        tx.append(varint(1))
-        // Value
+
+        // Outputs
+        let commitScript = witnessCommitment.flatMap { Data(hexString: $0) }
+        tx.append(varint(commitScript != nil ? 2 : 1))
+
+        // Output 0: mining reward → miner's address
         tx.append(contentsOf: withUnsafeBytes(of: Int64(value).littleEndian) { Data($0) })
-        // Script pubkey
         tx.append(varint(UInt64(scriptPubKey.count)))
         tx.append(scriptPubKey)
+
+        // Output 1: segwit witness commitment (BIP 141) — zero value, OP_RETURN scriptPubKey
+        if let cs = commitScript {
+            tx.append(contentsOf: withUnsafeBytes(of: Int64(0).littleEndian) { Data($0) })
+            tx.append(varint(UInt64(cs.count)))
+            tx.append(cs)
+        }
+
         // Locktime
         tx.append(contentsOf: withUnsafeBytes(of: UInt32(0).littleEndian) { Data($0) })
 
         return tx
     }
+
+    // MARK: - Encoding Helpers
 
     private func varint(_ n: UInt64) -> Data {
         if n < 0xfd {
@@ -368,75 +451,6 @@ class MinerEngine: ObservableObject {
 
     private func nonceHex(_ nonce: UInt32) -> String {
         withUnsafeBytes(of: nonce.littleEndian) { Data($0) }.hexString
-    }
-}
-
-// MARK: - Minimal BigUInt for base58 decoding
-
-struct BigUInt {
-    private var digits: [UInt32] // Base 2^32 digits, least significant first
-
-    static let zero = BigUInt(digits: [0])
-
-    init(_ value: Int) {
-        digits = [UInt32(value)]
-    }
-
-    private init(digits: [UInt32]) {
-        self.digits = digits
-    }
-
-    static func * (lhs: BigUInt, rhs: Int) -> BigUInt {
-        var carry: UInt64 = 0
-        var result: [UInt32] = []
-        for d in lhs.digits {
-            let prod = UInt64(d) * UInt64(rhs) + carry
-            result.append(UInt32(prod & 0xFFFFFFFF))
-            carry = prod >> 32
-        }
-        while carry > 0 {
-            result.append(UInt32(carry & 0xFFFFFFFF))
-            carry >>= 32
-        }
-        return BigUInt(digits: result)
-    }
-
-    static func + (lhs: BigUInt, rhs: BigUInt) -> BigUInt {
-        let maxLen = max(lhs.digits.count, rhs.digits.count)
-        var carry: UInt64 = 0
-        var result: [UInt32] = []
-        for i in 0..<maxLen {
-            let a = i < lhs.digits.count ? UInt64(lhs.digits[i]) : 0
-            let b = i < rhs.digits.count ? UInt64(rhs.digits[i]) : 0
-            let sum = a + b + carry
-            result.append(UInt32(sum & 0xFFFFFFFF))
-            carry = sum >> 32
-        }
-        if carry > 0 { result.append(UInt32(carry)) }
-        return BigUInt(digits: result)
-    }
-
-    static func % (lhs: BigUInt, rhs: Int) -> Int {
-        var remainder: UInt64 = 0
-        for d in lhs.digits.reversed() {
-            remainder = (remainder << 32 + UInt64(d)) % UInt64(rhs)
-        }
-        return Int(remainder)
-    }
-
-    static func / (lhs: BigUInt, rhs: Int) -> BigUInt {
-        var remainder: UInt64 = 0
-        var result = [UInt32](repeating: 0, count: lhs.digits.count)
-        for i in (0..<lhs.digits.count).reversed() {
-            let cur = remainder << 32 + UInt64(lhs.digits[i])
-            result[i] = UInt32(cur / UInt64(rhs))
-            remainder = cur % UInt64(rhs)
-        }
-        // Remove leading zeros
-        while result.count > 1 && result.last == 0 {
-            result.removeLast()
-        }
-        return BigUInt(digits: result)
     }
 }
 
